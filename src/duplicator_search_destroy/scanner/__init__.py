@@ -16,6 +16,7 @@ from duplicator_search_destroy.scanner.hasher import (
 )
 from duplicator_search_destroy.scanner.duplicates import find_duplicates
 from duplicator_search_destroy.scanner.files import walk_share, WalkedFile, WalkedFolder
+from duplicator_search_destroy.scanner.progress import ScanStats, StatsSnapshot, ThrottledEmitter
 
 __all__ = [
     "DiscoveredHost",
@@ -23,6 +24,9 @@ __all__ = [
     "HashResult",
     "WalkedFile",
     "WalkedFolder",
+    "ScanStats",
+    "StatsSnapshot",
+    "ThrottledEmitter",
     "discover_hosts",
     "probe_host",
     "enumerate_shares",

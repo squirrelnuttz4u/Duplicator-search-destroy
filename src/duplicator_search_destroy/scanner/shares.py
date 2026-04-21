@@ -1,20 +1,22 @@
 """Enumerate SMB shares exposed by a remote host.
 
-Two strategies, tried in order:
+Uses pywin32's ``win32net.NetShareEnum`` — the native Windows API that
+Explorer, ``net view``, and every AD admin tool already call. For hosts
+that require alternate credentials we first establish an authenticated
+session to ``\\\\host\\IPC$`` via ``WNetAddConnection2``, then run the
+enumeration under that session, then drop it. No third-party protocol
+code, no red-team-flavoured dependencies (impacket) that get flagged
+by Defender.
 
-1. **impacket srvsvc** — NetrShareEnum over DCE-RPC. Works cross-platform,
-   supports alternate credentials. This is the canonical equivalent of
-   Windows' ``NetShareEnum`` and is what CrackMapExec and NetExec use.
-2. **pywin32** fallback — ``win32net.NetShareEnum``. Only available on
-   Windows with the current-user token already authenticated to the target.
-
-Both paths return the same :class:`DiscoveredShare` dataclass so the caller
-never has to branch on which backend succeeded.
+On non-Windows platforms (e.g. a Linux dev box) enumeration raises
+:class:`ShareEnumerationError` with a clear message; the rest of the
+app continues to work for testing with mocks.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -32,9 +34,6 @@ SHARE_TYPE_DEVICE = 0x00000002
 SHARE_TYPE_IPC = 0x00000003
 SHARE_TYPE_SPECIAL = 0x80000000  # high bit = hidden/admin share
 
-# Default-hidden shares we usually DO want to inspect (admin shares are fine
-# when the credentials allow). Callers can pass ``include_hidden=False`` to
-# filter them out.
 DEFAULT_SKIP = {"IPC$", "PRINT$"}
 
 
@@ -55,76 +54,86 @@ class DiscoveredShare:
 
 
 class ShareEnumerationError(Exception):
-    """Raised when every enumeration strategy failed for a host."""
+    """Raised when share enumeration failed for a host."""
 
 
-def _enum_with_impacket(
+def _enum_with_pywin32(
     host: str,
     *,
     username: str = "",
     password: str = "",
     domain: str = "",
-    timeout: int = 10,
 ) -> List[DiscoveredShare]:
-    """Call ``NetrShareEnum`` via impacket."""
-    try:
-        from impacket.smbconnection import SMBConnection  # type: ignore[import-not-found]
-        from impacket.dcerpc.v5 import transport, srvs  # type: ignore[import-not-found]
-    except ImportError as exc:  # pragma: no cover - import guard
-        raise ShareEnumerationError("impacket is not installed") from exc
+    """Enumerate shares via Win32 ``NetShareEnum``.
 
-    smb = SMBConnection(host, host, sess_port=445, timeout=timeout)
-    try:
-        smb.login(username, password, domain)
-    except Exception as exc:
-        try:
-            smb.close()
-        except Exception:
-            pass
-        raise ShareEnumerationError(f"SMB login failed for {host}: {exc}") from exc
-
-    try:
-        rpctransport = transport.SMBTransport(
-            smb.getRemoteHost(), smb.getRemoteHost(), filename=r"\srvsvc", smb_connection=smb
-        )
-        dce = rpctransport.get_dce_rpc()
-        dce.connect()
-        dce.bind(srvs.MSRPC_UUID_SRVS)
-        resp = srvs.hNetrShareEnum(dce, 1)
-        shares: List[DiscoveredShare] = []
-        for entry in resp["InfoStruct"]["ShareInfo"]["Level1"]["Buffer"]:
-            name = str(entry["shi1_netname"][:-1])  # strip trailing NUL
-            remark = str(entry["shi1_remark"][:-1]) if entry["shi1_remark"] else None
-            stype = int(entry["shi1_type"])
-            shares.append(DiscoveredShare(host=host, name=name, remark=remark, share_type=stype))
-        dce.disconnect()
-        return shares
-    finally:
-        try:
-            smb.close()
-        except Exception:
-            pass
-
-
-def _enum_with_pywin32(host: str) -> List[DiscoveredShare]:  # pragma: no cover - Windows-only
+    If *username* is supplied, first establish an authenticated session to
+    ``\\\\host\\IPC$`` so the subsequent ``NetShareEnum`` uses those
+    credentials. The session is dropped before the function returns.
+    """
     try:
         import win32net  # type: ignore[import-not-found]
-        import win32netcon  # type: ignore[import-not-found]  # noqa: F401
+        import win32wnet  # type: ignore[import-not-found]
+        import pywintypes  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise ShareEnumerationError("pywin32 not available") from exc
+        raise ShareEnumerationError(
+            "pywin32 is required for share enumeration. "
+            "This feature only runs on Windows."
+        ) from exc
+
+    unc_target = f"\\\\{host}"
+    ipc_target = f"\\\\{host}\\IPC$"
+
+    cred_user: Optional[str] = None
+    if username:
+        # win32wnet accepts either DOMAIN\user or just user — build the first
+        # form if the caller provided a domain and the username isn't already
+        # domain-qualified.
+        if domain and "\\" not in username:
+            cred_user = f"{domain}\\{username}"
+        else:
+            cred_user = username
+
+    connection_target: Optional[str] = None
     try:
-        entries, _total, _resume = win32net.NetShareEnum(f"\\\\{host}", 1)
-    except Exception as exc:
-        raise ShareEnumerationError(f"NetShareEnum failed for {host}: {exc}") from exc
-    return [
-        DiscoveredShare(
-            host=host,
-            name=str(e["netname"]),
-            remark=str(e.get("remark", "")) or None,
-            share_type=int(e["type"]),
-        )
-        for e in entries
-    ]
+        if cred_user:
+            nr = win32wnet.NETRESOURCE()
+            nr.lpRemoteName = ipc_target
+            nr.dwType = win32wnet.RESOURCETYPE_ANY
+            try:
+                win32wnet.WNetAddConnection2(nr, password, cred_user, 0)
+                connection_target = ipc_target
+            except pywintypes.error as exc:
+                raise ShareEnumerationError(
+                    f"Could not authenticate to {ipc_target} as {cred_user}: {exc}"
+                ) from exc
+
+        try:
+            entries, _total, _resume = win32net.NetShareEnum(unc_target, 1)
+        except pywintypes.error as exc:
+            raise ShareEnumerationError(
+                f"NetShareEnum failed for {host}: {exc}"
+            ) from exc
+
+        result: List[DiscoveredShare] = []
+        for entry in entries:
+            name = str(entry.get("netname", "")).strip()
+            if not name:
+                continue
+            result.append(
+                DiscoveredShare(
+                    host=host,
+                    name=name,
+                    remark=(str(entry.get("remark", "")) or None),
+                    share_type=int(entry.get("type", 0)),
+                )
+            )
+        return result
+    finally:
+        if connection_target:
+            try:
+                win32wnet.WNetCancelConnection2(connection_target, 0, True)
+            except Exception:  # pragma: no cover - best effort
+                log.debug("Failed to drop session to %s", connection_target)
 
 
 def enumerate_shares(
@@ -138,28 +147,20 @@ def enumerate_shares(
 ) -> List[DiscoveredShare]:
     """Return the share list for *host*.
 
-    Tries impacket first (cross-platform + custom creds); if that fails and
-    pywin32 is available, falls back to it. Raises
-    :class:`ShareEnumerationError` if every backend failed.
+    Raises :class:`ShareEnumerationError` on failure. Filters out printer
+    queues (only disk shares are returned) and — unless asked — the IPC$
+    pseudo-share.
     """
-    errors: List[str] = []
+    if os.name != "nt":
+        # Non-Windows host: we literally can't make this syscall. Tests
+        # monkey-patch this out entirely.
+        raise ShareEnumerationError(
+            "Share enumeration requires Windows (pywin32 NetShareEnum)."
+        )
 
-    try:
-        shares = _enum_with_impacket(host, username=username, password=password, domain=domain)
-    except ShareEnumerationError as exc:
-        errors.append(f"impacket: {exc}")
-        shares = []
+    shares = _enum_with_pywin32(host, username=username, password=password, domain=domain)
 
-    if not shares:
-        try:
-            shares = _enum_with_pywin32(host)
-        except ShareEnumerationError as exc:
-            errors.append(f"pywin32: {exc}")
-
-    if not shares and errors:
-        raise ShareEnumerationError("; ".join(errors))
-
-    filtered = []
+    filtered: List[DiscoveredShare] = []
     for s in shares:
         if s.name in DEFAULT_SKIP and not include_ipc and s.name == "IPC$":
             continue

@@ -32,7 +32,7 @@ target: 200+ servers, 10M+ files).
 |------------------|---------------------------------------|
 | GUI              | PySide6 (Qt 6)                        |
 | SMB              | smbprotocol + smbclient               |
-| Share enum       | impacket (`srvsvc.hNetrShareEnum`)    |
+| Share enum       | pywin32 (`NetShareEnum` + `WNetAddConnection2`) |
 | Non-crypto hash  | xxhash (xxh3_128)                     |
 | Crypto hash      | blake3                                |
 | Storage          | SQLite (stdlib, WAL mode)             |

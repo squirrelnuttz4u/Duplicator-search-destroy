@@ -1,8 +1,13 @@
-"""Generic background worker that runs a callable on a QThread.
+"""Generic background worker that runs a scanner function on a QThread.
 
-Keeps Qt concerns out of the scanner modules. A scanner function takes
-``on_progress`` and ``cancel`` callables — this wrapper turns those into
-Qt signals the GUI can bind to.
+The worker exposes THREE Qt signals:
+
+* ``progress(message, done, total)`` — coarse step-level progress
+* ``stats(snapshot)``               — rich live counters (files/sec, ETA, …)
+* ``finished(result)`` / ``failed(tb)``
+
+The scanner modules have zero Qt imports — the translation from plain
+callbacks to Qt signals happens here.
 """
 
 from __future__ import annotations
@@ -15,13 +20,14 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ScanWorker"]
+__all__ = ["ScanWorker", "run_in_thread"]
 
 
 class ScanWorker(QObject):
-    progress = Signal(str, int, int)  # message, done, total
-    finished = Signal(object)           # return value from fn
-    failed = Signal(str)                # traceback text
+    progress = Signal(str, int, int)
+    stats = Signal(object)         # StatsSnapshot
+    finished = Signal(object)
+    failed = Signal(str)
 
     def __init__(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         super().__init__()
@@ -39,6 +45,7 @@ class ScanWorker(QObject):
     def run(self) -> None:
         kwargs = dict(self._kwargs)
         kwargs.setdefault("on_progress", self._emit_progress)
+        kwargs.setdefault("on_stats", self._emit_stats)
         kwargs.setdefault("cancel", self.is_cancelled)
         try:
             result = self._fn(*self._args, **kwargs)
@@ -54,9 +61,14 @@ class ScanWorker(QObject):
         except Exception:
             pass
 
+    def _emit_stats(self, snapshot) -> None:  # noqa: ANN001 - Qt-side
+        try:
+            self.stats.emit(snapshot)
+        except Exception:
+            pass
+
 
 def run_in_thread(worker: ScanWorker) -> QThread:
-    """Spin up a QThread running *worker*, return it so the caller can join."""
     thread = QThread()
     worker.moveToThread(thread)
     thread.started.connect(worker.run)

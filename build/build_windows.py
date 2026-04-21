@@ -47,7 +47,13 @@ def main() -> int:
         "--collect-all", "smbprotocol",
         "--collect-all", "smbclient",
         "--collect-all", "spnego",
-        "--collect-all", "impacket",
+        # pywin32 is used for DPAPI credential encryption AND for share
+        # enumeration (NetShareEnum / WNetAddConnection2 on Windows).
+        "--collect-submodules", "win32",
+        "--hidden-import", "win32net",
+        "--hidden-import", "win32wnet",
+        "--hidden-import", "win32crypt",
+        "--hidden-import", "pywintypes",
         # ---- crypto ----------------------------------------------------
         # cryptography uses cffi and dynamically imports backend modules
         # that PyInstaller's default scan misses — `--collect-all` is the
@@ -58,14 +64,6 @@ def main() -> int:
         "--copy-metadata", "cryptography",
         "--collect-submodules", "cffi",
         "--hidden-import", "_cffi_backend",
-        # impacket pulls these in via runtime imports:
-        "--collect-submodules", "pyasn1",
-        "--collect-submodules", "pyasn1_modules",
-        "--hidden-import", "Cryptodome",
-        "--hidden-import", "Cryptodome.Cipher",
-        "--hidden-import", "Cryptodome.Hash",
-        "--hidden-import", "Cryptodome.PublicKey",
-        "--hidden-import", "Crypto",
         # ---- GUI -------------------------------------------------------
         "--collect-all", "PySide6",
         # ---- hashing ---------------------------------------------------

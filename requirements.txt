@@ -1,6 +1,5 @@
 PySide6>=6.7
 smbprotocol>=1.15
-impacket>=0.12
 xxhash>=3.5
 blake3>=0.4
 cryptography>=41
