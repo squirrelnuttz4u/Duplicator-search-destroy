@@ -50,7 +50,30 @@ pip install pyinstaller
 python build\build_windows.py
 ```
 
-The built application appears under `dist\DuplicatorSearchDestroy\`.
+The built application appears under `dist\DuplicatorSearchDestroy\`. The
+folder is fully self-contained — copy it to any Windows 10 1809+ / 11
+machine, double-click `DuplicatorSearchDestroy.exe`, and it runs. No
+Python installation required on target machines.
+
+### Optional: build a Windows installer (.exe)
+
+If you want Start-menu shortcuts, an uninstall entry in Control Panel, and
+a single-file installer suitable for SCCM/Intune deployment:
+
+1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php).
+2. From the repo root run:
+
+   ```bat
+   build\build_installer.bat
+   ```
+
+3. The signed-capable installer appears at
+   `dist\installer\DuplicatorSearchDestroy-Setup-1.0.0.exe`.
+
+The installer offers per-user (no admin) or per-machine (admin) install on
+the first wizard page, preserves the SQLite inventory under `%APPDATA%`
+across upgrades, and force-closes any running instance before overwriting
+files.
 
 ## Running from source
 

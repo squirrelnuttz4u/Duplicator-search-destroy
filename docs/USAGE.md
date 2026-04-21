@@ -45,6 +45,31 @@ re-inserts. Hashes that were already computed are never recomputed —
 the hash phase is fully resumable, so you can stop and restart at any
 point without repeating work.
 
+## Installation options
+
+Two ways to deploy the app — both produce the same runtime behaviour:
+
+**Option A — portable folder (`build_windows.bat`)**
+
+Copy `dist\DuplicatorSearchDestroy\` anywhere (USB stick, network share,
+user profile). Double-click the `.exe` to run. No Start-menu entry, no
+registry changes, no admin required. Best for ad-hoc use from an admin
+workstation.
+
+**Option B — installed (`build_installer.bat` + Inno Setup)**
+
+Produces `DuplicatorSearchDestroy-Setup-<version>.exe`. The installer:
+
+* Lets the user pick per-user or per-machine install on the first page.
+* Creates Start-menu and (optionally) desktop icons.
+* Adds a Control Panel uninstall entry.
+* Supports silent install for mass deployment:
+  ```
+  setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="C:\Program Files\DuplicatorSearchDestroy"
+  ```
+* Preserves the `%APPDATA%\DuplicatorSearchDestroy\` inventory DB during
+  uninstall so reinstalling doesn't destroy months of indexing work.
+
 ## Database location
 
 * **Windows**: ``%APPDATA%\DuplicatorSearchDestroy\inventory.db``
