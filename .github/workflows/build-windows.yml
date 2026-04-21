@@ -15,6 +15,11 @@ on:
     branches:
       - main
 
+# Need write permission on the repo so the final step can commit the built
+# artifacts to the `builds` branch.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -108,3 +113,84 @@ jobs:
             dist/DuplicatorSearchDestroy-windows-x64.zip
             dist/installer/*.exe
           generate_release_notes: true
+
+      # -----------------------------------------------------------------
+      #  Publish artifacts *into* the repo on the `builds` branch so they
+      #  show up in the GitHub file tree without bloating main/feature
+      #  history. The branch is a single-commit rolling history: each
+      #  successful build fast-forwards over the previous one, so the
+      #  `.git` folder never accumulates old binary versions.
+      # -----------------------------------------------------------------
+      - name: Commit artifacts to `builds` branch
+        if: success() && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Stage the artifacts in a temp location before we rewrite the tree.
+          $staging = Join-Path $env:RUNNER_TEMP "artifacts"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "dist\DuplicatorSearchDestroy-windows-x64.zip" $staging
+          Get-ChildItem "dist\installer\*.exe" | ForEach-Object {
+            Copy-Item $_.FullName $staging
+          }
+
+          # Prepare a fresh worktree on an orphan `builds` branch. Using an
+          # orphan means no shared history with main → no bloat carried over.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          $buildsDir = Join-Path $env:RUNNER_TEMP "builds-worktree"
+          if (Test-Path $buildsDir) { Remove-Item -Recurse -Force $buildsDir }
+          git worktree add --detach $buildsDir
+
+          Push-Location $buildsDir
+          try {
+            git checkout --orphan builds
+            git rm -rf . 2>$null | Out-Null
+            Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Remove-Item -Recurse -Force
+
+            # Layout inside the `builds` branch:
+            #   releases/windows-x64/DuplicatorSearchDestroy-windows-x64.zip
+            #   releases/windows-x64/DuplicatorSearchDestroy-Setup-<version>.exe
+            #   releases/windows-x64/BUILD_INFO.txt
+            New-Item -ItemType Directory -Force -Path "releases\windows-x64" | Out-Null
+            Copy-Item "$staging\*" "releases\windows-x64\"
+
+            $info = @"
+            Build source commit: $env:SOURCE_SHA
+            Build source branch: $env:SOURCE_REF
+            Build timestamp:     $(Get-Date -Format 'o')
+            Workflow run:        https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+
+            Contents:
+              DuplicatorSearchDestroy-windows-x64.zip   portable PyInstaller --onedir build
+              DuplicatorSearchDestroy-Setup-*.exe       Inno Setup installer
+            "@
+            Set-Content -Path "releases\windows-x64\BUILD_INFO.txt" -Value $info
+
+            @"
+            # Built binaries
+
+            This branch contains ONLY pre-built Windows binaries. Source code lives on
+            main and feature branches — do not edit files here by hand; they are
+            overwritten on every successful build.
+
+            Latest build: ``$env:SOURCE_REF`` @ ``$env:SOURCE_SHA``
+            "@ | Set-Content -Path "README.md"
+
+            git add -A
+            git commit -m "Windows build from $env:SOURCE_REF @ $($env:SOURCE_SHA.Substring(0,8))"
+
+            # Force-push: builds branch is a single-commit rolling pointer, no
+            # history to preserve.
+            git push --force origin builds
+          } finally {
+            Pop-Location
+            git worktree remove --force $buildsDir
+          }
+

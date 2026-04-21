@@ -51,15 +51,20 @@ workflow, which:
 4. Zips the onedir output and compiles the Inno Setup installer.
 5. Uploads both as Actions artifacts (30-day retention).
 6. On a tag push of the form `vX.Y.Z`, attaches them to a GitHub Release.
+7. **Publishes the artifacts into the repo** on the orphan
+   [`builds`](https://github.com/squirrelnuttz4u/duplicator-search-destroy/tree/builds/releases/windows-x64)
+   branch. The branch holds only the latest build (force-pushed each
+   time), so it doesn't bloat the main branch's history.
 
-To get a build:
+### Download links
 
-- **Latest from this branch**: open the repo's
-  [Actions tab](https://github.com/squirrelnuttz4u/duplicator-search-destroy/actions/workflows/build-windows.yml)
-  → click the most recent run → download `DuplicatorSearchDestroy-windows-x64`
-  or `DuplicatorSearchDestroy-installer`.
-- **Tagged release**: `git tag v1.0.0 && git push origin v1.0.0`, then
-  grab the assets from the Releases page a few minutes later.
+* Latest build, directly from the repo:
+  https://github.com/squirrelnuttz4u/duplicator-search-destroy/tree/builds/releases/windows-x64
+  — the `.zip` and installer `.exe` are right there in the GitHub web UI.
+* Per-run artifacts with 30-day retention:
+  https://github.com/squirrelnuttz4u/duplicator-search-destroy/actions/workflows/build-windows.yml
+* Versioned release downloads (once you push a `v1.0.0` tag):
+  https://github.com/squirrelnuttz4u/duplicator-search-destroy/releases
 
 If you'd rather build locally, the instructions below still apply.
 
