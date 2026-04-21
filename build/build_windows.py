@@ -43,12 +43,34 @@ def main() -> int:
         "--distpath", str(ROOT / "dist"),
         "--specpath", str(ROOT / "build"),
         "--paths", str(ROOT / "src"),
-        "--collect-submodules", "smbprotocol",
-        "--collect-submodules", "spnego",
-        "--collect-submodules", "impacket",
+        # ---- networking + SMB stack -----------------------------------
+        "--collect-all", "smbprotocol",
+        "--collect-all", "smbclient",
+        "--collect-all", "spnego",
+        "--collect-all", "impacket",
+        # ---- crypto ----------------------------------------------------
+        # cryptography uses cffi and dynamically imports backend modules
+        # that PyInstaller's default scan misses — `--collect-all` is the
+        # reliable fix. `--copy-metadata` is required because some of the
+        # downstream libraries check the installed version via
+        # importlib.metadata at import time.
+        "--collect-all", "cryptography",
+        "--copy-metadata", "cryptography",
+        "--collect-submodules", "cffi",
+        "--hidden-import", "_cffi_backend",
+        # impacket pulls these in via runtime imports:
+        "--collect-submodules", "pyasn1",
+        "--collect-submodules", "pyasn1_modules",
+        "--hidden-import", "Cryptodome",
+        "--hidden-import", "Cryptodome.Cipher",
+        "--hidden-import", "Cryptodome.Hash",
+        "--hidden-import", "Cryptodome.PublicKey",
+        "--hidden-import", "Crypto",
+        # ---- GUI -------------------------------------------------------
         "--collect-all", "PySide6",
-        "--hidden-import", "blake3",
-        "--hidden-import", "xxhash",
+        # ---- hashing ---------------------------------------------------
+        "--collect-all", "blake3",
+        "--collect-all", "xxhash",
     ]
     if not args.debug:
         cmd += ["--windowed"]
