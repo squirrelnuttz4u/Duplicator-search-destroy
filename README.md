@@ -38,6 +38,31 @@ target: 200+ servers, 10M+ files).
 | Storage          | SQLite (stdlib, WAL mode)             |
 | Packaging        | PyInstaller 6 (`--onedir`, Windows)   |
 
+## Getting the Windows build
+
+Every push to `main` and every pushed feature branch triggers the
+[build-windows](.github/workflows/build-windows.yml) GitHub Actions
+workflow, which:
+
+1. Runs the 101-test pytest suite on a Windows runner.
+2. Produces a self-contained PyInstaller `--onedir` build.
+3. Smoke-tests the resulting `.exe` by running `--help` (catches missing
+   module errors that wouldn't show up at build time).
+4. Zips the onedir output and compiles the Inno Setup installer.
+5. Uploads both as Actions artifacts (30-day retention).
+6. On a tag push of the form `vX.Y.Z`, attaches them to a GitHub Release.
+
+To get a build:
+
+- **Latest from this branch**: open the repo's
+  [Actions tab](https://github.com/squirrelnuttz4u/duplicator-search-destroy/actions/workflows/build-windows.yml)
+  → click the most recent run → download `DuplicatorSearchDestroy-windows-x64`
+  or `DuplicatorSearchDestroy-installer`.
+- **Tagged release**: `git tag v1.0.0 && git push origin v1.0.0`, then
+  grab the assets from the Releases page a few minutes later.
+
+If you'd rather build locally, the instructions below still apply.
+
 ## Building the Windows .exe
 
 On a Windows host with Python 3.11+ installed:

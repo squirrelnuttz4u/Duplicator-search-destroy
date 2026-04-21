@@ -1,0 +1,110 @@
+name: build-windows
+
+on:
+  # Manual trigger — you can hit "Run workflow" from the Actions tab.
+  workflow_dispatch:
+  # Build on every push to the feature branch so the latest bits are always
+  # available to download as an Actions artifact.
+  push:
+    branches:
+      - main
+      - "claude/**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Build PyInstaller onedir app
+        run: python build\build_windows.py
+
+      - name: Smoke-test the built .exe (import check)
+        shell: pwsh
+        run: |
+          $exe = "dist\DuplicatorSearchDestroy\DuplicatorSearchDestroy.exe"
+          if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
+          # Launch with --help so the binary exits immediately but still
+          # initialises every import (cryptography, smbprotocol, PySide6, etc.).
+          # This catches the "no module named ..." class of bugs at build time.
+          $p = Start-Process -FilePath $exe -ArgumentList "--help" -PassThru -NoNewWindow -RedirectStandardOutput help.txt -RedirectStandardError err.txt
+          if (-not $p.WaitForExit(30000)) {
+            $p.Kill()
+            throw "DuplicatorSearchDestroy.exe --help timed out — likely a silent import failure."
+          }
+          Get-Content help.txt
+          if ($p.ExitCode -ne 0) {
+            Get-Content err.txt
+            throw "DuplicatorSearchDestroy.exe --help exited with code $($p.ExitCode)"
+          }
+
+      - name: Zip the onedir build
+        shell: pwsh
+        run: |
+          $zip = "dist\DuplicatorSearchDestroy-windows-x64.zip"
+          Compress-Archive -Path "dist\DuplicatorSearchDestroy\*" -DestinationPath $zip
+          Get-Item $zip | Format-List Length,FullName
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          New-Item -ItemType Directory -Force -Path dist\installer | Out-Null
+          & $iscc build\installer.iss
+          Get-ChildItem dist\installer\*.exe | Format-List Length,FullName
+
+      - name: Upload onedir zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuplicatorSearchDestroy-windows-x64
+          path: dist/DuplicatorSearchDestroy-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuplicatorSearchDestroy-installer
+          path: dist/installer/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach artifacts to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/DuplicatorSearchDestroy-windows-x64.zip
+            dist/installer/*.exe
+          generate_release_notes: true
