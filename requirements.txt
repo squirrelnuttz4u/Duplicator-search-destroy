@@ -3,4 +3,5 @@ smbprotocol>=1.15
 xxhash>=3.5
 blake3>=0.4
 cryptography>=41
+pypsrp>=0.8
 pywin32>=306; sys_platform == "win32"

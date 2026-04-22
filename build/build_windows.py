@@ -47,6 +47,9 @@ def main() -> int:
         "--collect-all", "smbprotocol",
         "--collect-all", "smbclient",
         "--collect-all", "spnego",
+        # pypsrp runs PowerShell remotely for the "remote hash" feature.
+        # It pulls in a small forest of WSMan + NTLM/Kerberos helpers.
+        "--collect-all", "pypsrp",
         # pywin32 is used for DPAPI credential encryption AND for share
         # enumeration (NetShareEnum / WNetAddConnection2 on Windows).
         "--collect-submodules", "win32",

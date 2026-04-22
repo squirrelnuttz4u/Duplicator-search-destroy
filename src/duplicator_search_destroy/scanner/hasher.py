@@ -105,6 +105,12 @@ def hash_full(
     size: Optional[int] = None,
     on_progress: Optional[Callable[[int, Optional[int]], None]] = None,
 ) -> str:
+    """BLAKE3 hash of *path*, returned as ``"blake3:<hex>"``.
+
+    The algorithm prefix is part of the return value so callers can mix
+    hashes from different backends (e.g. remote SHA256 via WinRM) in the
+    same ``files.full_hash`` column without cross-matching false positives.
+    """
     h = _blake3()
     read_so_far = 0
     with _open_file(path) as fh:
@@ -119,7 +125,7 @@ def hash_full(
                     on_progress(read_so_far, size)
                 except Exception:
                     pass
-    return h.hexdigest()
+    return f"blake3:{h.hexdigest()}"
 
 
 def cascade_hash(path: str, size: int) -> HashResult:
@@ -164,7 +170,7 @@ def cascade_hash(path: str, size: int) -> HashResult:
             size=size,
             prefix_hash=prefix_hex,
             suffix_hash=suffix_hex,
-            full_hash=full_hex,
+            full_hash=f"blake3:{full_hex}",
         )
     except Exception as exc:
         log.warning("Failed to hash %s: %s", path, exc)

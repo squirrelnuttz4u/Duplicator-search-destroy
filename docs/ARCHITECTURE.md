@@ -35,7 +35,9 @@
 | `scanner.network`               | TCP 445 probe + NetBIOS node-status resolver                        |
 | `scanner.shares`                | `NetrShareEnum` via impacket / pywin32                              |
 | `scanner.files`                 | `walk_share` — DFS walk over an SMB share                           |
-| `scanner.hasher`                | Cascaded xxh3 prefix/suffix + BLAKE3 full hash                      |
+| `scanner.hasher`                | Cascaded xxh3 prefix/suffix + BLAKE3 full hash (local / SMB mode)   |
+| `scanner.winrm_client`          | Thin pypsrp wrapper — PowerShell over WinRM                         |
+| `scanner.remote_hash`           | WinRM-pushed `Get-FileHash` back-end + base64-safe payload building |
 | `scanner.duplicates`            | Size-bucket → hash candidate files → duplicate sets                 |
 | `scanner.orchestrator`          | Phase coordination; DB writes; progress + cancel plumbing           |
 | `gui.worker`                    | QObject that runs scanner fns on a QThread                          |

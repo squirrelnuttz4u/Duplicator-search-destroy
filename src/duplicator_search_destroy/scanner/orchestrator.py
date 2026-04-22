@@ -22,7 +22,10 @@ import time
 from typing import Callable, List, Optional
 
 from duplicator_search_destroy.models.database import Database, Host, Share
-from duplicator_search_destroy.scanner.duplicates import hash_candidate_files
+from duplicator_search_destroy.scanner.duplicates import (
+    hash_candidate_files,
+    hash_candidates_via_winrm,
+)
 from duplicator_search_destroy.scanner.files import (
     register_session,
     unregister_session,
@@ -419,17 +422,28 @@ class Orchestrator:
         *,
         min_size: int = 1,
         max_workers: int = 8,
+        use_winrm: bool = False,
+        winrm_algorithm: str = "sha256",
+        winrm_throttle: int = 8,
+        winrm_fallback_to_smb: bool = True,
         on_progress: Optional[ProgressCb] = None,
         on_stats: Optional[StatsCb] = None,
         cancel: Optional[CancelCb] = None,
     ) -> int:
+        """Hash candidate files, then let :func:`find_duplicates` collate.
+
+        ``use_winrm=True`` switches from the per-file SMB-read back-end
+        (default, BLAKE3) to a per-host WinRM PowerShell call (SHA256). See
+        :mod:`scanner.remote_hash` for the wire format and server-side
+        requirements. Hash strings carry an ``algo:`` prefix so the two
+        back-ends never cross-match false positives.
+        """
         run = self.db.start_run("hash")
         stats = ScanStats("hash")
         emitter = ThrottledEmitter(on_stats)
 
         def _cb(done: int, total: int) -> None:
             stats.update_totals(shares_total=total)
-            # Re-use shares_done as the "files hashed" counter for display.
             snap_count = done
             while snap_count > stats.snapshot().shares_done:
                 stats.end_share("hashing", error=False)
@@ -438,13 +452,25 @@ class Orchestrator:
                 on_progress("hashing", done, total)
 
         try:
-            count = hash_candidate_files(
-                self.db,
-                min_size=min_size,
-                max_workers=max_workers,
-                on_progress=_cb,
-                cancel=cancel,
-            )
+            if use_winrm:
+                count = hash_candidates_via_winrm(
+                    self.db,
+                    min_size=min_size,
+                    algorithm=winrm_algorithm,
+                    throttle=winrm_throttle,
+                    fallback_to_smb=winrm_fallback_to_smb,
+                    smb_max_workers=max_workers,
+                    on_progress=_cb,
+                    cancel=cancel,
+                )
+            else:
+                count = hash_candidate_files(
+                    self.db,
+                    min_size=min_size,
+                    max_workers=max_workers,
+                    on_progress=_cb,
+                    cancel=cancel,
+                )
             self.db.finish_run(run, "done", f"{count} files hashed")
             emitter.flush(stats.snapshot())
             return count

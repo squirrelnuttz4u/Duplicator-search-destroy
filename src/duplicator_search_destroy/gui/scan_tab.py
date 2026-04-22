@@ -133,6 +133,29 @@ class ScanTab(QWidget):
         resume_row.addWidget(self.lbl_scan_state)
         root.addLayout(resume_row)
 
+        # WinRM-remote-hash toggle
+        winrm_row = QHBoxLayout()
+        self.chk_winrm_hash = QCheckBox(
+            "Hash remotely via WinRM (10-50× faster; requires WinRM + admin on every server)"
+        )
+        self.chk_winrm_hash.setChecked(False)
+        self.chk_winrm_hash.setToolTip(
+            "When checked, duplicate-candidate hashing runs PowerShell's "
+            "Get-FileHash on each server via WinRM instead of reading file "
+            "bytes over SMB. Server requirements:\n"
+            "  • WinRM enabled (run `winrm quickconfig`)\n"
+            "  • TCP 5985 (HTTP) reachable from this host\n"
+            "  • Credentials with WinRM rights — domain admin works\n\n"
+            "Falls back to SMB automatically if WinRM fails for a host, "
+            "so one badly-configured server can't break the whole run.\n\n"
+            "Remote mode uses SHA-256 (built into Windows); local mode uses "
+            "BLAKE3. Hashes carry an algorithm prefix so the two never "
+            "cross-match."
+        )
+        winrm_row.addWidget(self.chk_winrm_hash)
+        winrm_row.addStretch(1)
+        root.addLayout(winrm_row)
+
         # Action buttons
         btn_row = QHBoxLayout()
         self.btn_scan_files = QPushButton("Scan all shares")
@@ -248,11 +271,14 @@ class ScanTab(QWidget):
         )
 
     def _hash(self) -> None:
+        use_winrm = self.chk_winrm_hash.isChecked()
         self._run(
             self.orchestrator.hash_and_find_duplicates,
-            label="Hashing duplicate candidates",
+            label=("Hashing via WinRM" if use_winrm else "Hashing duplicate candidates"),
             max_workers=int(self.hash_workers.value()),
             min_size=int(self.min_size.value()),
+            use_winrm=use_winrm,
+            winrm_throttle=int(self.hash_workers.value()),
         )
 
     def _run(self, fn, *, label: str, **kwargs) -> None:

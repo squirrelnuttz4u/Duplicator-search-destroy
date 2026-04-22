@@ -45,6 +45,49 @@ re-inserts. Hashes that were already computed are never recomputed —
 the hash phase is fully resumable, so you can stop and restart at any
 point without repeating work.
 
+## Optional: remote hashing via WinRM
+
+The Scan tab has a checkbox labelled **"Hash remotely via WinRM"**. When
+enabled, the dedup hash phase pushes a short PowerShell `Get-FileHash`
+script to each target server via WinRM instead of reading file bytes over
+SMB. For a ~200-server fleet with thousands of GB-sized duplicate
+candidates this is typically **10-50× faster** — you eliminate the
+file-content transfer; only 64 bytes of hex comes back per file.
+
+### Server-side requirements
+
+- WinRM enabled:
+  ```powershell
+  winrm quickconfig
+  ```
+- TCP 5985 (HTTP) or 5986 (HTTPS) reachable from the scanning host.
+- Credentials with WinRM rights. Domain admins have this by default;
+  otherwise add the account to `BUILTIN\Remote Management Users`.
+- PowerShell 5.1 (PS 7+ is used automatically when available for
+  faster parallel hashing via `ForEach-Object -Parallel`).
+
+### Behaviour
+
+- Hashes computed remotely use **SHA-256** (built into Windows).
+- Hashes computed locally (SMB mode) use **BLAKE3**.
+- Both are stored with an algorithm prefix (`sha256:…` / `blake3:…`) so
+  the two can never cross-match — a file hashed with SHA-256 on one run
+  and BLAKE3 on another is *not* reported as a duplicate of itself.
+- If WinRM fails for a host (auth error, firewall, service not running)
+  we **fall back to SMB** for that host only, so one broken server
+  doesn't kill the whole run.
+- If you want strict remote-only (fail rather than fall back), you can
+  invoke `hash_candidates_via_winrm(db, fallback_to_smb=False)` from the
+  Python API.
+
+### EDR considerations
+
+Running PowerShell remotely + streaming structured data back looks like
+classic lateral-movement to every major EDR product. Expect alerts
+unless you whitelist the scanning host. If that's unacceptable in your
+environment, leave the checkbox off and use the default SMB-based
+hashing — it works in every environment, just slower.
+
 ## Installation options
 
 Two ways to deploy the app — both produce the same runtime behaviour:
