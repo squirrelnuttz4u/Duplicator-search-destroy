@@ -203,12 +203,25 @@ class Orchestrator:
         *,
         max_workers: int = 4,
         max_depth: int = 64,
+        resume: bool = False,
         on_progress: Optional[ProgressCb] = None,
         on_stats: Optional[StatsCb] = None,
         cancel: Optional[CancelCb] = None,
     ) -> int:
+        """Walk every accessible share in parallel across hosts.
+
+        ``resume=True`` skips shares that have a recorded successful scan
+        (``last_scan IS NOT NULL``). Use it to continue a cancelled run
+        without re-indexing what's already done. Partial shares — where a
+        prior scan was cancelled mid-walk — are *not* skipped, because
+        ``mark_share_scanned`` is only called on clean completion, so
+        ``last_scan`` stays NULL on them and they get re-walked.
+        """
         run = self.db.start_run("files")
         all_shares = self.db.list_shares()
+        if resume:
+            all_shares = [s for s in all_shares if s.last_scan is None]
+
         # Bucket shares by host — each worker processes one host at a time
         # so we only open one SMB session per target and the server sees
         # predictable load.
@@ -258,7 +271,13 @@ class Orchestrator:
                         files_count += self._scan_one_share(
                             share, target, max_depth=max_depth, cancel=cancel, stats=stats
                         )
-                        self.db.mark_share_scanned(share.id)
+                        # Only mark the share as scanned if we got through it
+                        # without being cancelled. A cancel mid-walk leaves
+                        # last_scan NULL so a later resume will re-process it
+                        # (and clear_share_index will wipe the partial rows
+                        # before the re-walk).
+                        if not (cancel and cancel()):
+                            self.db.mark_share_scanned(share.id)
                     except Exception as exc:
                         err = True
                         log.exception("Scan failed for %s: %s", unc, exc)

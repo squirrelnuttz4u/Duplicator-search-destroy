@@ -20,6 +20,7 @@ from typing import Optional
 from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -114,6 +115,24 @@ class ScanTab(QWidget):
         opt_row.addStretch(1)
         root.addLayout(opt_row)
 
+        # Resume / full-rescan toggle
+        resume_row = QHBoxLayout()
+        self.chk_resume = QCheckBox("Resume: skip shares already indexed in a previous run")
+        self.chk_resume.setChecked(True)
+        self.chk_resume.setToolTip(
+            "When checked, scan_files will skip any share whose previous run "
+            "completed successfully (last_scan is set). Un-check to force a "
+            "full re-scan from scratch.\n\n"
+            "Shares cancelled mid-walk are always re-scanned — partial rows "
+            "from the interrupted run get wiped first."
+        )
+        resume_row.addWidget(self.chk_resume)
+        resume_row.addStretch(1)
+
+        self.lbl_scan_state = QLabel("")
+        resume_row.addWidget(self.lbl_scan_state)
+        root.addLayout(resume_row)
+
         # Action buttons
         btn_row = QHBoxLayout()
         self.btn_scan_files = QPushButton("Scan all shares")
@@ -179,6 +198,22 @@ class ScanTab(QWidget):
             f"Folders: <b>{c['folders']:,}</b> &nbsp; Files: <b>{c['files']:,}</b> &nbsp; "
             f"Total size: <b>{human_size(total_bytes)}</b>"
         )
+        # Scan-state indicator next to the Resume checkbox.
+        shares = self.db.list_shares()
+        total_shares = len(shares)
+        done = sum(1 for s in shares if s.last_scan is not None)
+        pending = total_shares - done
+        if total_shares == 0:
+            self.lbl_scan_state.setText("")
+        elif pending == 0:
+            self.lbl_scan_state.setText(
+                f"<span style='color:#1b5e20;'>All {total_shares} share(s) indexed.</span>"
+            )
+        else:
+            self.lbl_scan_state.setText(
+                f"<b>{done}</b>/{total_shares} share(s) indexed, "
+                f"<b>{pending}</b> pending."
+            )
 
     # -- actions --------------------------------------------------------
 
@@ -191,10 +226,25 @@ class ScanTab(QWidget):
                 "There are no shares to scan. Run share enumeration on the Credentials tab first.",
             )
             return
+        resume = self.chk_resume.isChecked()
+        pending = [s for s in shares if s.last_scan is None]
+        if resume and not pending:
+            ok = QMessageBox.question(
+                self,
+                "Nothing to resume",
+                "Every share already has a completed scan. Run a full re-scan instead?\n\n"
+                "Yes → un-check Resume and scan everything.\n"
+                "No  → do nothing.",
+            )
+            if ok != QMessageBox.Yes:
+                return
+            resume = False
+            self.chk_resume.setChecked(False)
         self._run(
             self.orchestrator.scan_files,
             label="Indexing files",
             max_workers=int(self.parallel_hosts.value()),
+            resume=resume,
         )
 
     def _hash(self) -> None:
@@ -222,7 +272,12 @@ class ScanTab(QWidget):
     def _cancel(self) -> None:
         if self._worker:
             self._worker.cancel()
-            self.status.setText("Cancelling…")
+            self.status.setText(
+                "Cancelling… whatever has been indexed so far is already in "
+                "the database — switch to the Duplicates or Reports tab to "
+                "query it, or click 'Scan all shares' again (with Resume on) "
+                "to pick up where this run left off."
+            )
 
     # -- slots ----------------------------------------------------------
 
