@@ -1,10 +1,7 @@
 name: build-windows
 
 on:
-  # Manual trigger — you can hit "Run workflow" from the Actions tab.
   workflow_dispatch:
-  # Build on every push to the feature branch so the latest bits are always
-  # available to download as an Actions artifact.
   push:
     branches:
       - main
@@ -15,8 +12,6 @@ on:
     branches:
       - main
 
-# Need write permission on the repo so the final step can commit the built
-# artifacts to the `builds` branch.
 permissions:
   contents: write
 
@@ -47,24 +42,31 @@ jobs:
       - name: Build PyInstaller onedir app
         run: python build\build_windows.py
 
-      - name: Smoke-test the built .exe (import check)
+      # --------------------------------------------------------------
+      #  Smoke test: run the built .exe with --selftest so it imports
+      #  every bundled module (cryptography, smbprotocol, PySide6, …)
+      #  and returns 0 without launching a GUI. --help can't be used on
+      #  a --windowed build because sys.stdout is None, so argparse
+      #  crashes when it tries to print.
+      # --------------------------------------------------------------
+      - name: Smoke-test the built .exe
         shell: pwsh
         run: |
           $exe = "dist\DuplicatorSearchDestroy\DuplicatorSearchDestroy.exe"
           if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
-          # Launch with --help so the binary exits immediately but still
-          # initialises every import (cryptography, smbprotocol, PySide6, etc.).
-          # This catches the "no module named ..." class of bugs at build time.
-          $p = Start-Process -FilePath $exe -ArgumentList "--help" -PassThru -NoNewWindow -RedirectStandardOutput help.txt -RedirectStandardError err.txt
-          if (-not $p.WaitForExit(30000)) {
-            $p.Kill()
-            throw "DuplicatorSearchDestroy.exe --help timed out — likely a silent import failure."
+          # Use a finite wait: if the bootloader pops an error MessageBox
+          # on a broken bundle it would otherwise hang the job until the
+          # default 6h timeout.
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -PassThru -NoNewWindow
+          $ok = $p.WaitForExit(60000)
+          if (-not $ok) {
+            try { $p.Kill() } catch {}
+            throw "Selftest timed out after 60s. Likely a bundle crash showing a modal MessageBox."
           }
-          Get-Content help.txt
           if ($p.ExitCode -ne 0) {
-            Get-Content err.txt
-            throw "DuplicatorSearchDestroy.exe --help exited with code $($p.ExitCode)"
+            throw "Selftest failed with exit code $($p.ExitCode) — a bundled module is broken."
           }
+          Write-Host "[OK] Selftest passed."
 
       - name: Zip the onedir build
         shell: pwsh
@@ -114,13 +116,12 @@ jobs:
             dist/installer/*.exe
           generate_release_notes: true
 
-      # -----------------------------------------------------------------
-      #  Publish artifacts *into* the repo on the `builds` branch so they
-      #  show up in the GitHub file tree without bloating main/feature
-      #  history. The branch is a single-commit rolling history: each
-      #  successful build fast-forwards over the previous one, so the
-      #  `.git` folder never accumulates old binary versions.
-      # -----------------------------------------------------------------
+      # --------------------------------------------------------------
+      #  Publish artifacts into the repo on the `builds` branch so they
+      #  show up in the GitHub file tree. The branch is a single-commit
+      #  orphan that gets force-pushed each run, so the repo never
+      #  accumulates old binary revisions.
+      # --------------------------------------------------------------
       - name: Commit artifacts to `builds` branch
         if: success() && github.event_name != 'pull_request'
         shell: pwsh
@@ -139,8 +140,6 @@ jobs:
             Copy-Item $_.FullName $staging
           }
 
-          # Prepare a fresh worktree on an orphan `builds` branch. Using an
-          # orphan means no shared history with main → no bloat carried over.
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -154,43 +153,34 @@ jobs:
             git rm -rf . 2>$null | Out-Null
             Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Remove-Item -Recurse -Force
 
-            # Layout inside the `builds` branch:
-            #   releases/windows-x64/DuplicatorSearchDestroy-windows-x64.zip
-            #   releases/windows-x64/DuplicatorSearchDestroy-Setup-<version>.exe
-            #   releases/windows-x64/BUILD_INFO.txt
             New-Item -ItemType Directory -Force -Path "releases\windows-x64" | Out-Null
             Copy-Item "$staging\*" "releases\windows-x64\"
 
-            $info = @"
-            Build source commit: $env:SOURCE_SHA
-            Build source branch: $env:SOURCE_REF
-            Build timestamp:     $(Get-Date -Format 'o')
-            Workflow run:        https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+            # Build BUILD_INFO.txt as a plain string (PowerShell here-strings
+            # are fragile under YAML indentation — the closing "@ has to be
+            # at column 0).
+            $buildInfo = "Build source commit: $env:SOURCE_SHA`r`n"
+            $buildInfo += "Build source branch: $env:SOURCE_REF`r`n"
+            $buildInfo += "Build timestamp:     $(Get-Date -Format 'o')`r`n"
+            $buildInfo += "Workflow run:        https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`r`n`r`n"
+            $buildInfo += "Contents:`r`n"
+            $buildInfo += "  DuplicatorSearchDestroy-windows-x64.zip   portable PyInstaller --onedir build`r`n"
+            $buildInfo += "  DuplicatorSearchDestroy-Setup-*.exe       Inno Setup installer`r`n"
+            Set-Content -Path "releases\windows-x64\BUILD_INFO.txt" -Value $buildInfo -Encoding utf8
 
-            Contents:
-              DuplicatorSearchDestroy-windows-x64.zip   portable PyInstaller --onedir build
-              DuplicatorSearchDestroy-Setup-*.exe       Inno Setup installer
-            "@
-            Set-Content -Path "releases\windows-x64\BUILD_INFO.txt" -Value $info
-
-            @"
-            # Built binaries
-
-            This branch contains ONLY pre-built Windows binaries. Source code lives on
-            main and feature branches — do not edit files here by hand; they are
-            overwritten on every successful build.
-
-            Latest build: ``$env:SOURCE_REF`` @ ``$env:SOURCE_SHA``
-            "@ | Set-Content -Path "README.md"
+            $shortSha = $env:SOURCE_SHA.Substring(0, 8)
+            $readme = "# Built binaries`r`n`r`n"
+            $readme += "This branch contains ONLY pre-built Windows binaries. Source code`r`n"
+            $readme += "lives on main and feature branches -- do not edit files here by hand;`r`n"
+            $readme += "they are overwritten on every successful build.`r`n`r`n"
+            $readme += "Latest build: ``$env:SOURCE_REF`` @ ``$shortSha```r`n`r`n"
+            $readme += "Download from: releases/windows-x64/`r`n"
+            Set-Content -Path "README.md" -Value $readme -Encoding utf8
 
             git add -A
-            git commit -m "Windows build from $env:SOURCE_REF @ $($env:SOURCE_SHA.Substring(0,8))"
-
-            # Force-push: builds branch is a single-commit rolling pointer, no
-            # history to preserve.
+            git commit -m "Windows build from $env:SOURCE_REF @ $shortSha"
             git push --force origin builds
           } finally {
             Pop-Location
             git worktree remove --force $buildsDir
           }
-
